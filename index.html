@@ -2,11 +2,11 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Neon Dimension Hopper — Bhop + Perspective Switch</title>
+<title>Neon Dimension Hopper</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: #0a0a12;
+    background: #050510;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -14,35 +14,18 @@
     overflow: hidden;
     font-family: 'Segoe UI', system-ui, sans-serif;
     color: #e0f7ff;
+    user-select: none;
   }
   canvas {
     border: 2px solid #00f0ff;
-    box-shadow: 0 0 40px rgba(0, 240, 255, 0.3);
+    box-shadow: 0 0 50px rgba(0, 240, 255, 0.35);
     background: #050510;
+    cursor: pointer;
   }
-  #ui {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    pointer-events: none;
-    text-shadow: 0 0 8px #00f0ff;
-  }
-  #ui h1 { font-size: 18px; letter-spacing: 2px; margin-bottom: 6px; }
-  #ui p { font-size: 13px; opacity: 0.85; line-height: 1.4; }
-  .mode-side { color: #00f0ff; }
-  .mode-top  { color: #ff00aa; }
 </style>
 </head>
 <body>
 <canvas id="c" width="1100" height="650"></canvas>
-<div id="ui">
-  <h1>NEON DIMENSION HOPPER</h1>
-  <p>
-    <span id="modeText" class="mode-side">MODO: SIDE-SCROLLER</span><br>
-    WASD / Setas = Mover | Espaço = Pular | Shift / Tab = Trocar Perspectiva<br>
-    R = Reiniciar | Bhop: pule no frame exato do pouso para manter e ganhar velocidade
-  </p>
-</div>
 
 <script>
 const canvas = document.getElementById('c');
@@ -50,114 +33,264 @@ const ctx = canvas.getContext('2d');
 const W = canvas.width;
 const H = canvas.height;
 
-// ===================== CONFIGURAÇÃO BHOP =====================
-const GRAVITY       = 0.55;
-const JUMP_FORCE    = -11.8;
-const GROUND_ACCEL  = 0.55;
-const AIR_ACCEL     = 0.28;
+// ===================== BHOP CONFIG =====================
+const GRAVITY = 0.55;
+const JUMP_FORCE = -11.8;
+const GROUND_ACCEL = 0.55;
+const AIR_ACCEL = 0.28;
 const AIR_STRAFE_GAIN = 0.18;
 const MAX_GROUND_SPEED = 9.5;
-const MAX_AIR_SPEED    = 14.5;
-const FRICTION      = 0.72;
-const BHOP_WINDOW   = 6;
+const MAX_AIR_SPEED = 14.5;
+const FRICTION = 0.72;
+const BHOP_WINDOW = 6;
 const SPEED_GAIN_PER_HOP = 0.65;
 const MAX_HOP_BONUS = 7.5;
 
-// ===================== ESTADO =====================
-let mode = 'side';
-let cameraX = 0;
+// ===================== GAME STATE =====================
+let state = 'menu'; // menu | skins | playing | levelComplete | win
+let currentLevel = 1;
+const TOTAL_LEVELS = 30;
+let selectedSkin = 0;
+let mouseX = 0, mouseY = 0;
+
+// ===================== SKINS =====================
+const skins = [
+  { name: 'Ciano Neon', body: '#e8ffff', ear: '#b0f0ff', glow: '#00f0ff', eye: '#00f0ff' },
+  { name: 'Magenta',    body: '#ffe8ff', ear: '#ffb0f0', glow: '#ff00aa', eye: '#ff00aa' },
+  { name: 'Verde Matrix',body: '#e8ffe8', ear: '#b0ffb0', glow: '#00ff66', eye: '#00ff66' },
+  { name: 'Dourado',    body: '#fff8e0', ear: '#ffe8a0', glow: '#ffcc00', eye: '#ffaa00' },
+  { name: 'Roxo Galaxy',body: '#f0e8ff', ear: '#d0b0ff', glow: '#aa00ff', eye: '#cc44ff' },
+  { name: 'Vermelho',   body: '#ffe8e8', ear: '#ffb0b0', glow: '#ff2244', eye: '#ff2244' },
+  { name: 'Gelo',       body: '#f0ffff', ear: '#d0f0ff', glow: '#88eeff', eye: '#44ccff' },
+  { name: 'Arco-íris',  body: '#ffffff', ear: '#ffffff', glow: '#ff00ff', eye: '#00ffff', rainbow: true }
+];
+
+// ===================== PLAYER =====================
+const player = {
+  x: 120, y: 420, w: 22, h: 28,
+  vx: 0, vy: 0,
+  onGround: false, facing: 1
+};
+
+// ===================== LEVEL SYSTEM =====================
+let platforms = [];
+let goal = { x: 0, y: 0, w: 60, h: 40 };
+let levelStartX = 120, levelStartY = 420;
+
+function generateLevel(n) {
+  const plats = [];
+  let x = 0;
+  const baseY = 480;
+
+  plats.push({ x: 0, y: baseY, w: 260 + Math.random()*40, h: 40 });
+  x = 280;
+
+  const numPlatforms = 6 + Math.floor(n * 0.6) + Math.floor(Math.random() * 3);
+  let lastY = baseY;
+
+  for (let i = 0; i < numPlatforms; i++) {
+    const gap = 70 + n * 4 + Math.random() * (40 + n * 3);
+    const width = Math.max(50, 110 - n * 1.5 + Math.random() * 40);
+    let y = lastY + (Math.random() - 0.55) * (50 + n * 4);
+    y = Math.max(180, Math.min(520, y));
+
+    if (i > 2 && Math.random() < 0.25 + n * 0.01) {
+      y = lastY - (60 + n * 3 + Math.random() * 40);
+      y = Math.max(140, y);
+    }
+
+    plats.push({ x: x + gap, y: y, w: width, h: 18 + Math.random() * 8 });
+    x += gap + width;
+    lastY = y;
+
+    if (n > 12 && Math.random() < 0.3) {
+      const extraY = y - 50 - Math.random() * 40;
+      if (extraY > 120) {
+        plats.push({ x: x - width * 0.7, y: extraY, w: 40 + Math.random()*30, h: 14 });
+      }
+    }
+  }
+
+  if (n % 4 === 0 || n > 20) {
+    const corridorX = x + 80;
+    const corridorW = 380 + n * 5;
+    plats.push({ x: corridorX, y: 260, w: 50, h: 240 });
+    plats.push({ x: corridorX, y: 480, w: corridorW, h: 40 });
+    plats.push({ x: corridorX + corridorW - 50, y: 260, w: 50, h: 240 });
+
+    for (let k = 0; k < 2 + Math.floor(n / 8); k++) {
+      plats.push({
+        x: corridorX + 80 + k * 90 + Math.random()*30,
+        y: 320 + Math.random() * 100,
+        w: 50 + Math.random()*40,
+        h: 16
+      });
+    }
+    x = corridorX + corridorW + 40;
+  }
+
+  for (let i = 0; i < 2 + (n > 15 ? 1 : 0); i++) {
+    const gap = 60 + n * 3;
+    const width = 80 + Math.random() * 40;
+    const y = 380 + (Math.random() - 0.5) * 80;
+    plats.push({ x: x + gap, y: Math.max(200, Math.min(480, y)), w: width, h: 20 });
+    x += gap + width;
+  }
+
+  const goalX = x + 50;
+  const goalY = 400;
+  plats.push({ x: goalX - 20, y: goalY + 20, w: 120, h: 60 });
+
+  platforms = plats;
+  goal = { x: goalX + 20, y: goalY, w: 60, h: 40 };
+  levelStartX = 120;
+  levelStartY = 420;
+}
+
+// ===================== PARTICLES & EFFECTS =====================
 let particles = [];
 let trails = [];
+let screenShake = 0;
+let flashAlpha = 0;
+let bgStars = [];
+
+for (let i = 0; i < 80; i++) {
+  bgStars.push({
+    x: Math.random() * 3000,
+    y: Math.random() * H,
+    size: Math.random() * 1.8 + 0.3,
+    speed: 0.2 + Math.random() * 0.6,
+    alpha: 0.2 + Math.random() * 0.5
+  });
+}
+
+function spawnParticles(x, y, count, color, speed = 4) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = Math.random() * speed + 1;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd,
+      life: 25 + Math.random() * 25,
+      maxLife: 50,
+      color,
+      size: 1.5 + Math.random() * 2.5
+    });
+  }
+}
+
+// ===================== INPUT =====================
 let keys = {};
 let hopStreak = 0;
 let framesSinceLand = 999;
-let won = false;
+let cameraX = 0;
+let wonLevel = false;
 let dead = false;
+let mode = 'side';
 
-// ===================== JOGADOR =====================
-const player = {
-  x: 120,
-  y: 420,
-  w: 22,
-  h: 28,
-  vx: 0,
-  vy: 0,
-  onGround: false,
-  facing: 1
-};
-
-// ===================== MAPA =====================
-const platforms = [
-  {x: 0, y: 480, w: 280, h: 40},
-  {x: 320, y: 460, w: 90, h: 20},
-  {x: 460, y: 430, w: 90, h: 20},
-  {x: 600, y: 400, w: 90, h: 20},
-  {x: 780, y: 380, w: 110, h: 20},
-  {x: 960, y: 360, w: 100, h: 20},
-  {x: 1120, y: 320, w: 140, h: 20},
-  {x: 1320, y: 280, w: 60, h: 220},
-  {x: 1320, y: 480, w: 400, h: 40},
-  {x: 1660, y: 280, w: 60, h: 220},
-  {x: 1420, y: 340, w: 80, h: 20},
-  {x: 1520, y: 400, w: 80, h: 20},
-  {x: 1760, y: 420, w: 120, h: 80}
-];
-
-const goal = {x: 1790, y: 400, w: 60, h: 40};
-
-// ===================== INPUT =====================
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'Tab') {
     e.preventDefault();
-    switchMode();
+    if (state === 'playing') switchMode();
   }
-  if (e.code === 'KeyR') reset();
+  if (e.code === 'KeyR' && state === 'playing') resetLevel();
+  if (e.code === 'Escape') {
+    if (state === 'skins' || state === 'playing' || state === 'levelComplete') state = 'menu';
+  }
+  if ((e.code === 'Enter' || e.code === 'Space') && state !== 'playing') {
+    if (state === 'menu') startGame();
+    else if (state === 'levelComplete') nextLevel();
+    else if (state === 'win') { state = 'menu'; currentLevel = 1; }
+  }
 });
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// ===================== FUNÇÕES PRINCIPAIS =====================
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = (e.clientX - rect.left) * (W / rect.width);
+  mouseY = (e.clientY - rect.top) * (H / rect.height);
+});
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+
+  if (state === 'menu') {
+    if (buttonHit(mx, my, W/2 - 120, 280, 240, 55)) startGame();
+    if (buttonHit(mx, my, W/2 - 120, 360, 240, 55)) state = 'skins';
+  } else if (state === 'skins') {
+    const startX = 80, cardW = 110, gap = 20;
+    for (let i = 0; i < skins.length; i++) {
+      const col = i % 4;
+      const row = Math.floor(i / 4);
+      const cx = startX + col * (cardW + gap);
+      const cy = 160 + row * 160;
+      if (buttonHit(mx, my, cx, cy, cardW, 130)) {
+        selectedSkin = i;
+        spawnParticles(cx + cardW/2, cy + 65, 20, skins[i].glow, 5);
+      }
+    }
+    if (buttonHit(mx, my, W/2 - 100, H - 90, 200, 50)) state = 'menu';
+  } else if (state === 'levelComplete') {
+    if (buttonHit(mx, my, W/2 - 110, 380, 220, 55)) nextLevel();
+  } else if (state === 'win') {
+    if (buttonHit(mx, my, W/2 - 110, 400, 220, 55)) {
+      state = 'menu';
+      currentLevel = 1;
+    }
+  }
+});
+
+function buttonHit(mx, my, x, y, w, h) {
+  return mx >= x && mx <= x + w && my >= y && my <= y + h;
+}
+
 function switchMode() {
   mode = mode === 'side' ? 'top' : 'side';
-  for (let i = 0; i < 18; i++) {
-    particles.push({
-      x: player.x + player.w/2,
-      y: player.y + player.h/2,
-      vx: (Math.random()-0.5)*8,
-      vy: (Math.random()-0.5)*8,
-      life: 30 + Math.random()*20,
-      color: mode === 'side' ? '#00f0ff' : '#ff00aa'
-    });
-  }
-  updateUI();
+  const skin = skins[selectedSkin];
+  spawnParticles(player.x + player.w/2, player.y + player.h/2, 22, skin.glow, 7);
+  screenShake = 6;
 }
 
-function updateUI() {
-  const el = document.getElementById('modeText');
-  if (mode === 'side') {
-    el.textContent = 'MODO: SIDE-SCROLLER (Gravidade ON)';
-    el.className = 'mode-side';
-  } else {
-    el.textContent = 'MODO: TOP-DOWN (Livre)';
-    el.className = 'mode-top';
-  }
+function startGame() {
+  currentLevel = 1;
+  generateLevel(currentLevel);
+  resetLevel();
+  state = 'playing';
 }
 
-function reset() {
-  player.x = 120;
-  player.y = 420;
+function resetLevel() {
+  player.x = levelStartX;
+  player.y = levelStartY;
   player.vx = 0;
   player.vy = 0;
   hopStreak = 0;
   framesSinceLand = 999;
-  won = false;
+  wonLevel = false;
   dead = false;
   mode = 'side';
   particles = [];
   trails = [];
-  updateUI();
+  cameraX = 0;
+  screenShake = 0;
 }
 
+function nextLevel() {
+  currentLevel++;
+  if (currentLevel > TOTAL_LEVELS) {
+    state = 'win';
+    spawnParticles(W/2, H/2, 80, '#00ff88', 10);
+    return;
+  }
+  generateLevel(currentLevel);
+  resetLevel();
+  state = 'playing';
+}
+
+// ===================== PHYSICS =====================
 function rectsCollide(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x &&
          a.y < b.y + b.h && a.y + a.h > b.y;
@@ -165,7 +298,7 @@ function rectsCollide(a, b) {
 
 function resolveCollision() {
   player.onGround = false;
-  const pRect = {x: player.x, y: player.y, w: player.w, h: player.h};
+  const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
 
   for (const plat of platforms) {
     if (!rectsCollide(pRect, plat)) continue;
@@ -174,12 +307,9 @@ function resolveCollision() {
     const overlapY = Math.min(player.y + player.h - plat.y, plat.y + plat.h - player.y);
 
     if (overlapX < overlapY) {
-      if (player.x + player.w/2 < plat.x + plat.w/2) {
-        player.x = plat.x - player.w;
-      } else {
-        player.x = plat.x + plat.w;
-      }
-      player.vx *= -0.3;
+      if (player.x + player.w/2 < plat.x + plat.w/2) player.x = plat.x - player.w;
+      else player.x = plat.x + plat.w;
+      player.vx *= -0.25;
     } else {
       if (player.y + player.h/2 < plat.y + plat.h/2) {
         player.y = plat.y - player.h;
@@ -187,6 +317,9 @@ function resolveCollision() {
           if (framesSinceLand > BHOP_WINDOW) {
             player.vx *= FRICTION;
             hopStreak = 0;
+          } else if (hopStreak > 2) {
+            screenShake = 3;
+            flashAlpha = 0.15;
           }
           player.vy = 0;
           player.onGround = true;
@@ -201,7 +334,7 @@ function resolveCollision() {
 }
 
 function updatePlayer() {
-  if (won || dead) return;
+  if (wonLevel || dead || state !== 'playing') return;
 
   const left  = keys['ArrowLeft']  || keys['KeyA'];
   const right = keys['ArrowRight'] || keys['KeyD'];
@@ -237,41 +370,34 @@ function updatePlayer() {
 
     if (jump && (player.onGround || framesSinceLand <= BHOP_WINDOW)) {
       player.vy = JUMP_FORCE;
-      if (player.onGround || framesSinceLand <= BHOP_WINDOW) {
-        hopStreak++;
-        const dir = Math.sign(player.vx) || player.facing;
-        player.vx += dir * SPEED_GAIN_PER_HOP * 0.6;
-      }
+      const wasPerfect = framesSinceLand <= BHOP_WINDOW && !player.onGround;
+      hopStreak++;
+      const dir = Math.sign(player.vx) || player.facing;
+      player.vx += dir * SPEED_GAIN_PER_HOP * 0.6;
       player.onGround = false;
       framesSinceLand = 999;
-      for (let i = 0; i < 8; i++) {
-        particles.push({
-          x: player.x + player.w/2,
-          y: player.y + player.h,
-          vx: (Math.random()-0.5)*4,
-          vy: Math.random()*2 + 1,
-          life: 20,
-          color: '#00f0ff'
-        });
+
+      const skin = skins[selectedSkin];
+      spawnParticles(player.x + player.w/2, player.y + player.h, 10, skin.glow, 3);
+      if (wasPerfect || hopStreak > 3) {
+        spawnParticles(player.x + player.w/2, player.y + player.h, 8, '#ffffff', 5);
+        flashAlpha = 0.12;
       }
     }
 
     if (player.onGround && !jump && framesSinceLand > 2) {
       player.vx *= 0.82;
     }
-
   } else {
     player.vy = 0;
-    const accel = 0.45;
-    const maxSpd = 7.5;
+    const accel = 0.48;
+    const maxSpd = 7.8;
     if (left)  player.vx -= accel;
     if (right) player.vx += accel;
     if (up)    player.vy -= accel;
     if (down)  player.vy += accel;
-
-    player.vx *= 0.90;
-    player.vy *= 0.90;
-
+    player.vx *= 0.89;
+    player.vy *= 0.89;
     const spd = Math.hypot(player.vx, player.vy);
     if (spd > maxSpd) {
       player.vx = (player.vx / spd) * maxSpd;
@@ -281,176 +407,422 @@ function updatePlayer() {
 
   player.x += player.vx;
   player.y += player.vy;
-
   resolveCollision();
 
   if (player.y > 900) {
     dead = true;
-    setTimeout(reset, 900);
+    screenShake = 12;
+    setTimeout(() => { if (dead) resetLevel(); }, 800);
   }
 
   if (rectsCollide({x:player.x, y:player.y, w:player.w, h:player.h}, goal)) {
-    won = true;
+    wonLevel = true;
+    state = 'levelComplete';
+    screenShake = 10;
+    const skin = skins[selectedSkin];
+    spawnParticles(goal.x + 30, goal.y + 20, 50, skin.glow, 8);
+    spawnParticles(goal.x + 30, goal.y + 20, 30, '#ffffff', 6);
   }
 
-  if (Math.abs(player.vx) > 6 || Math.abs(player.vy) > 4) {
+  if (Math.abs(player.vx) > 5 || Math.abs(player.vy) > 3) {
+    const skin = skins[selectedSkin];
     trails.push({
       x: player.x + player.w/2,
       y: player.y + player.h/2,
-      life: 12,
-      color: mode === 'side' ? 'rgba(0,240,255,0.5)' : 'rgba(255,0,170,0.5)'
+      life: 14,
+      color: skin.glow + '88'
     });
   }
 }
 
 function updateParticles() {
-  for (let i = particles.length-1; i >= 0; i--) {
+  for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx;
     p.y += p.vy;
+    p.vx *= 0.96;
+    p.vy *= 0.96;
     p.life--;
     if (p.life <= 0) particles.splice(i, 1);
   }
-  for (let i = trails.length-1; i >= 0; i--) {
+  for (let i = trails.length - 1; i >= 0; i--) {
     trails[i].life--;
     if (trails[i].life <= 0) trails.splice(i, 1);
   }
+  if (screenShake > 0) screenShake *= 0.85;
+  if (flashAlpha > 0) flashAlpha *= 0.9;
 }
 
-function draw() {
+// ===================== DRAW HELPERS =====================
+function drawButton(x, y, w, h, text, isHover, accent = '#00f0ff') {
+  ctx.save();
+  if (isHover) {
+    ctx.shadowBlur = 25;
+    ctx.shadowColor = accent;
+  }
+  ctx.fillStyle = isHover ? accent + '33' : '#0a1520';
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = isHover ? 3 : 2;
+  roundRectPath(ctx, x, y, w, h, 12);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = isHover ? '#ffffff' : accent;
+  ctx.font = 'bold 22px Segoe UI, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w/2, y + h/2 + 1);
+  ctx.restore();
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function getRainbowColor(t) {
+  const r = Math.sin(t) * 127 + 128;
+  const g = Math.sin(t + 2) * 127 + 128;
+  const b = Math.sin(t + 4) * 127 + 128;
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+
+// ===================== DRAW =====================
+function drawBackground() {
   ctx.fillStyle = '#050510';
   ctx.fillRect(0, 0, W, H);
 
-  ctx.strokeStyle = mode === 'side' ? 'rgba(0,240,255,0.04)' : 'rgba(255,0,170,0.04)';
+  ctx.save();
+  for (const s of bgStars) {
+    const sx = ((s.x - cameraX * s.speed) % 3000 + 3000) % 3000;
+    ctx.globalAlpha = s.alpha;
+    ctx.fillStyle = '#a0e0ff';
+    ctx.beginPath();
+    ctx.arc(sx, s.y, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  ctx.strokeStyle = mode === 'side' ? 'rgba(0,240,255,0.035)' : 'rgba(255,0,170,0.035)';
   ctx.lineWidth = 1;
-  const gridSize = 40;
-  const offsetX = -cameraX % gridSize;
-  for (let x = offsetX; x < W; x += gridSize) {
+  const gs = 50;
+  const ox = -(cameraX % gs);
+  for (let x = ox; x < W; x += gs) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
   }
-  for (let y = 0; y < H; y += gridSize) {
+  for (let y = 0; y < H; y += gs) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
+}
+
+function drawPlayer() {
+  const skin = skins[selectedSkin];
+  let glow = skin.glow, body = skin.body, ear = skin.ear, eye = skin.eye;
+
+  if (skin.rainbow) {
+    const t = Date.now() / 200;
+    glow = getRainbowColor(t);
+    eye = getRainbowColor(t + 1);
+    body = '#ffffff';
+    ear = getRainbowColor(t + 2);
+  }
+
+  const px = player.x + player.w / 2;
+  const py = player.y + player.h / 2;
+
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = glow;
+
+  ctx.fillStyle = body;
+  roundRectPath(ctx, player.x, player.y, player.w, player.h, 7);
+  ctx.fill();
+
+  ctx.fillStyle = ear;
+  ctx.fillRect(player.x + 3, player.y - 11, 5, 13);
+  ctx.fillRect(player.x + player.w - 8, player.y - 11, 5, 13);
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = eye;
+  ctx.beginPath();
+  ctx.arc(px + player.facing * 4, py - 2, 3.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (Math.abs(player.vx) > 9) {
+    ctx.strokeStyle = glow + '66';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      const lx = player.x - player.facing * (15 + i * 12);
+      ctx.beginPath();
+      ctx.moveTo(lx, player.y + 5 + i * 6);
+      ctx.lineTo(lx - player.facing * 18, player.y + 5 + i * 6);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawGame() {
+  const shakeX = (Math.random() - 0.5) * screenShake;
+  const shakeY = (Math.random() - 0.5) * screenShake;
+
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+
+  drawBackground();
 
   ctx.save();
   ctx.translate(-cameraX, 0);
 
+  const accent = mode === 'side' ? '#00f0ff' : '#ff00aa';
   for (const p of platforms) {
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = mode === 'side' ? '#00f0ff' : '#ff00aa';
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = accent;
     ctx.fillStyle = mode === 'side' ? '#0a2a35' : '#2a0a25';
     ctx.fillRect(p.x, p.y, p.w, p.h);
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = mode === 'side' ? '#00f0ff' : '#ff00aa';
+    ctx.strokeStyle = accent;
     ctx.lineWidth = 2;
     ctx.strokeRect(p.x, p.y, p.w, p.h);
   }
 
-  ctx.shadowBlur = 20;
+  ctx.shadowBlur = 22;
   ctx.shadowColor = '#00ff88';
-  ctx.fillStyle = won ? '#00ff88' : '#00cc66';
+  ctx.fillStyle = '#00cc66';
   ctx.fillRect(goal.x, goal.y, goal.w, goal.h);
   ctx.shadowBlur = 0;
-  ctx.fillStyle = '#003322';
+  ctx.fillStyle = '#002211';
   ctx.font = 'bold 14px sans-serif';
-  ctx.fillText('GOAL', goal.x + 12, goal.y + 25);
+  ctx.textAlign = 'center';
+  ctx.fillText('GOAL', goal.x + goal.w/2, goal.y + 26);
+  ctx.textAlign = 'left';
 
   for (const t of trails) {
-    ctx.globalAlpha = t.life / 12;
+    ctx.globalAlpha = t.life / 14;
     ctx.fillStyle = t.color;
     ctx.beginPath();
-    ctx.arc(t.x, t.y, 4, 0, Math.PI*2);
+    ctx.arc(t.x, t.y, 3.5, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
 
   for (const p of particles) {
-    ctx.globalAlpha = p.life / 40;
+    ctx.globalAlpha = p.life / p.maxLife;
     ctx.fillStyle = p.color;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 2.5, 0, Math.PI*2);
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  const px = player.x + player.w/2;
-  const py = player.y + player.h/2;
-
-  ctx.shadowBlur = 18;
-  ctx.shadowColor = mode === 'side' ? '#00f0ff' : '#ff00aa';
-
-  ctx.fillStyle = '#e8ffff';
-  ctx.beginPath();
-  ctx.roundRect(player.x, player.y, player.w, player.h, 6);
-  ctx.fill();
-
-  ctx.fillStyle = '#b0f0ff';
-  ctx.fillRect(player.x + 3, player.y - 10, 5, 12);
-  ctx.fillRect(player.x + player.w - 8, player.y - 10, 5, 12);
-
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = mode === 'side' ? '#00f0ff' : '#ff00aa';
-  ctx.beginPath();
-  ctx.arc(px + player.facing * 4, py - 2, 3, 0, Math.PI*2);
-  ctx.fill();
-
+  drawPlayer();
   ctx.restore();
 
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(W - 210, 15, 190, 60);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(15, 15, 210, 78);
+  ctx.strokeStyle = '#00f0ff55';
+  ctx.strokeRect(15, 15, 210, 78);
+
   ctx.fillStyle = '#00f0ff';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(`LEVEL ${currentLevel} / ${TOTAL_LEVELS}`, 28, 40);
   ctx.font = '13px monospace';
-  ctx.fillText(`Velocidade: ${Math.abs(player.vx).toFixed(1)}`, W - 195, 38);
-  ctx.fillText(`Hop Streak: ${hopStreak}`, W - 195, 58);
+  ctx.fillText(`Vel: ${Math.abs(player.vx).toFixed(1)}`, 28, 62);
+  ctx.fillText(`Hop Streak: ${hopStreak}`, 28, 80);
 
-  if (won) {
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillStyle = mode === 'side' ? '#00f0ff' : '#ff00aa';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(mode === 'side' ? 'SIDE-SCROLLER' : 'TOP-DOWN', W - 25, 35);
+  ctx.textAlign = 'left';
+
+  if (flashAlpha > 0.01) {
+    ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
     ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#00ff88';
-    ctx.font = 'bold 48px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('DIMENSION CLEARED!', W/2, H/2 - 20);
-    ctx.font = '20px sans-serif';
-    ctx.fillText('Pressione R para jogar novamente', W/2, H/2 + 30);
-    ctx.textAlign = 'left';
   }
 
-  if (dead) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#ff4466';
-    ctx.font = 'bold 36px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('CAIUSTE!', W/2, H/2);
-    ctx.textAlign = 'left';
-  }
+  ctx.restore();
 }
 
+function drawMenu() {
+  drawBackground();
+
+  ctx.save();
+  ctx.shadowBlur = 30;
+  ctx.shadowColor = '#00f0ff';
+  ctx.fillStyle = '#e0f7ff';
+  ctx.font = 'bold 48px Segoe UI, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('NEON DIMENSION', W/2, 140);
+  ctx.fillStyle = '#00f0ff';
+  ctx.font = 'bold 42px Segoe UI, sans-serif';
+  ctx.fillText('HOPPER', W/2, 195);
+  ctx.restore();
+
+  ctx.fillStyle = '#88aacc';
+  ctx.font = '16px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Bunny Hop + Alternância de Perspectiva', W/2, 235);
+
+  const hoverPlay = buttonHit(mouseX, mouseY, W/2 - 120, 280, 240, 55);
+  const hoverSkin = buttonHit(mouseX, mouseY, W/2 - 120, 360, 240, 55);
+
+  drawButton(W/2 - 120, 280, 240, 55, '▶  JOGAR', hoverPlay, '#00f0ff');
+  drawButton(W/2 - 120, 360, 240, 55, '🎨  SKINS', hoverSkin, '#ff00aa');
+
+  ctx.fillStyle = '#556677';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('30 levels • Bhop • Perspective Switch', W/2, H - 40);
+}
+
+function drawSkins() {
+  drawBackground();
+
+  ctx.fillStyle = '#e0f7ff';
+  ctx.font = 'bold 32px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('ESCOLHA SUA SKIN', W/2, 70);
+
+  const startX = 80, cardW = 110, gap = 20;
+
+  for (let i = 0; i < skins.length; i++) {
+    const col = i % 4;
+    const row = Math.floor(i / 4);
+    const cx = startX + col * (cardW + gap);
+    const cy = 160 + row * 160;
+    const skin = skins[i];
+    const isSelected = selectedSkin === i;
+    const isHover = buttonHit(mouseX, mouseY, cx, cy, cardW, 130);
+
+    ctx.save();
+    if (isSelected || isHover) {
+      ctx.shadowBlur = 20;
+      ctx.shadowColor = skin.glow;
+    }
+    ctx.fillStyle = isSelected ? skin.glow + '22' : '#0a1520';
+    ctx.strokeStyle = isSelected ? skin.glow : (isHover ? '#ffffff88' : '#334455');
+    ctx.lineWidth = isSelected ? 3 : 2;
+    roundRectPath(ctx, cx, cy, cardW, 130, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    let glow = skin.glow, body = skin.body, ear = skin.ear, eye = skin.eye;
+    if (skin.rainbow) {
+      const t = Date.now() / 200;
+      glow = getRainbowColor(t);
+      eye = getRainbowColor(t + 1);
+      ear = getRainbowColor(t + 2);
+    }
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = glow;
+    ctx.fillStyle = body;
+    roundRectPath(ctx, cx + 35, cy + 30, 40, 48, 8);
+    ctx.fill();
+    ctx.fillStyle = ear;
+    ctx.fillRect(cx + 40, cy + 16, 8, 18);
+    ctx.fillRect(cx + 62, cy + 16, 8, 18);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = eye;
+    ctx.beginPath();
+    ctx.arc(cx + 60, cy + 50, 4, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = isSelected ? skin.glow : '#aaccdd';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(skin.name, cx + cardW/2, cy + 112);
+    ctx.restore();
+  }
+
+  const hoverBack = buttonHit(mouseX, mouseY, W/2 - 100, H - 90, 200, 50);
+  drawButton(W/2 - 100, H - 90, 200, 50, '← VOLTAR', hoverBack, '#00f0ff');
+}
+
+function drawLevelComplete() {
+  drawGame();
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.shadowBlur = 25;
+  ctx.shadowColor = '#00ff88';
+  ctx.fillStyle = '#00ff88';
+  ctx.font = 'bold 48px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('LEVEL CLEAR!', W/2, 200);
+  ctx.restore();
+
+  ctx.fillStyle = '#e0f7ff';
+  ctx.font = '22px sans-serif';
+  ctx.fillText(`Level ${currentLevel} completado!`, W/2, 260);
+
+  if (currentLevel < TOTAL_LEVELS) {
+    ctx.fillStyle = '#88aacc';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(`Próximo: Level ${currentLevel + 1}`, W/2, 300);
+  }
+
+  const hover = buttonHit(mouseX, mouseY, W/2 - 110, 380, 220, 55);
+  drawButton(W/2 - 110, 380, 220, 55, currentLevel >= TOTAL_LEVELS ? 'VER RESULTADO' : 'PRÓXIMO LEVEL →', hover, '#00ff88');
+}
+
+function drawWin() {
+  drawBackground();
+
+  ctx.save();
+  ctx.shadowBlur = 40;
+  ctx.shadowColor = '#00ff88';
+  ctx.fillStyle = '#00ff88';
+  ctx.font = 'bold 52px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('DIMENSION MASTER!', W/2, 180);
+  ctx.restore();
+
+  ctx.fillStyle = '#e0f7ff';
+  ctx.font = '24px sans-serif';
+  ctx.fillText('Você completou os 30 levels!', W/2, 250);
+
+  ctx.fillStyle = '#88aacc';
+  ctx.font = '16px sans-serif';
+  ctx.fillText('O coelhinho neon agradece a jornada.', W/2, 300);
+
+  for (const p of particles) {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const hover = buttonHit(mouseX, mouseY, W/2 - 110, 400, 220, 55);
+  drawButton(W/2 - 110, 400, 220, 55, 'VOLTAR AO MENU', hover, '#00f0ff');
+}
+
+// ===================== MAIN LOOP =====================
 function loop() {
-  updatePlayer();
+  if (state === 'playing') {
+    updatePlayer();
+    const targetCam = player.x - W * 0.35;
+    cameraX += (targetCam - cameraX) * 0.09;
+    if (cameraX < 0) cameraX = 0;
+  }
+
   updateParticles();
 
-  const targetCam = player.x - W * 0.35;
-  cameraX += (targetCam - cameraX) * 0.08;
-  if (cameraX < 0) cameraX = 0;
+  if (state === 'menu') drawMenu();
+  else if (state === 'skins') drawSkins();
+  else if (state === 'playing') drawGame();
+  else if (state === 'levelComplete') drawLevelComplete();
+  else if (state === 'win') drawWin();
 
-  draw();
   requestAnimationFrame(loop);
 }
 
-if (!CanvasRenderingContext2D.prototype.roundRect) {
-  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
-    this.beginPath();
-    this.moveTo(x + r, y);
-    this.arcTo(x + w, y, x + w, y + h, r);
-    this.arcTo(x + w, y + h, x, y + h, r);
-    this.arcTo(x, y + h, x, y, r);
-    this.arcTo(x, y, x + w, y, r);
-    this.closePath();
-  };
-}
-
-updateUI();
 loop();
 </script>
 </body>
