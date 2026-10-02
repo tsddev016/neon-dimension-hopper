@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Neon Dimension Hopper — Bhop + Perspective Switch</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a12;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #e0f7ff;
+  }
+  canvas {
+    border: 2px solid #00f0ff;
+    box-shadow: 0 0 40px rgba(0, 240, 255, 0.3);
+    background: #050510;
+  }
+  #ui {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    pointer-events: none;
+    text-shadow: 0 0 8px #00f0ff;
+  }
+  #ui h1 { font-size: 18px; letter-spacing: 2px; margin-bottom: 6px; }
+  #ui p { font-size: 13px; opacity: 0.85; line-height: 1.4; }
+  .mode-side { color: #00f0ff; }
+  .mode-top  { color: #ff00aa; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1100" height="650"></canvas>
+<div id="ui">
+  <h1>NEON DIMENSION HOPPER</h1>
+  <p>
+    <span id="modeText" class="mode-side">MODO: SIDE-SCROLLER</span><br>
+    WASD / Setas = Mover | Espaço = Pular | Shift / Tab = Trocar Perspectiva<br>
+    R = Reiniciar | Bhop: pule no frame exato do pouso para manter e ganhar velocidade
+  </p>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// ===================== CONFIGURAÇÃO BHOP =====================
+const GRAVITY       = 0.55;
+const JUMP_FORCE    = -11.8;
+const GROUND_ACCEL  = 0.55;
+const AIR_ACCEL     = 0.28;
+const AIR_STRAFE_GAIN = 0.18;
+const MAX_GROUND_SPEED = 9.5;
+const MAX_AIR_SPEED    = 14.5;
+const FRICTION      = 0.72;
+const BHOP_WINDOW   = 6;
+const SPEED_GAIN_PER_HOP = 0.65;
+const MAX_HOP_BONUS = 7.5;
+
+// ===================== ESTADO =====================
+let mode = 'side';
+let cameraX = 0;
+let particles = [];
+let trails = [];
+let keys = {};
+let hopStreak = 0;
+let framesSinceLand = 999;
+let won = false;
+let dead = false;
+
+// ===================== JOGADOR =====================
+const player = {
+  x: 120,
+  y: 420,
+  w: 22,
+  h: 28,
+  vx: 0,
+  vy: 0,
+  onGround: false,
+  facing: 1
+};
+
+// ===================== MAPA =====================
+const platforms = [
+  {x: 0, y: 480, w: 280, h: 40},
+  {x: 320, y: 460, w: 90, h: 20},
+  {x: 460, y: 430, w: 90, h: 20},
+  {x: 600, y: 400, w: 90, h: 20},
+  {x: 780, y: 380, w: 110, h: 20},
+  {x: 960, y: 360, w: 100, h: 20},
+  {x: 1120, y: 320, w: 140, h: 20},
+  {x: 1320, y: 280, w: 60, h: 220},
+  {x: 1320, y: 480, w: 400, h: 40},
+  {x: 1660, y: 280, w: 60, h: 220},
+  {x: 1420, y: 340, w: 80, h: 20},
+  {x: 1520, y: 400, w: 80, h: 20},
+  {x: 1760, y: 420, w: 120, h: 80}
+];
+
+const goal = {x: 1790, y: 400, w: 60, h: 40};
+
+// ===================== INPUT =====================
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'Tab') {
+    e.preventDefault();
+    switchMode();
+  }
+  if (e.code === 'KeyR') reset();
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// ===================== FUNÇÕES PRINCIPAIS =====================
+function switchMode() {
+  mode = mode === 'side' ? 'top' : 'side';
+  for (let i = 0; i < 18; i++) {
+    particles.push({
+      x: player.x + player.w/2,
+      y: player.y + player.h/2,
+      vx: (Math.random()-0.5)*8,
+      vy: (Math.random()-0.5)*8,
+      life: 30 + Math.random()*20,
+      color: mode === 'side' ? '#00f0ff' : '#ff00aa'
+    });
+  }
+  updateUI();
+}
+
+function updateUI() {
+  const el = document.getElementById('modeText');
+  if (mode === 'side') {
+    el.textContent = 'MODO: SIDE-SCROLLER (Gravidade ON)';
+    el.className = 'mode-side';
+  } else {
+    el.textContent = 'MODO: TOP-DOWN (Livre)';
+    el.className = 'mode-top';
+  }
+}
+
+function reset() {
+  player.x = 120;
+  player.y = 420;
+  player.vx = 0;
+  player.vy = 0;
+  hopStreak = 0;
+  framesSinceLand = 999;
+  won = false;
+  dead = false;
+  mode = 'side';
+  particles = [];
+  trails = [];
+  updateUI();
+}
+
+function rectsCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function resolveCollision() {
+  player.onGround = false;
+  const pRect = {x: player.x, y: player.y, w: player.w, h: player.h};
+
+  for (const plat of platforms) {
+    if (!rectsCollide(pRect, plat)) continue;
+
+    const overlapX = Math.min(player.x + player.w - plat.x, plat.x + plat.w - player.x);
+    const overlapY = Math.min(player.y + player.h - plat.y, plat.y + plat.h - player.y);
+
+    if (overlapX < overlapY) {
+      if (player.x + player.w/2 < plat.x + plat.w/2) {
+        player.x = plat.x - player.w;
+      } else {
+        player.x = plat.x + plat.w;
+      }
+      player.vx *= -0.3;
+    } else {
+      if (player.y + player.h/2 < plat.y + plat.h/2) {
+        player.y = plat.y - player.h;
+        if (player.vy > 0) {
+          if (framesSinceLand > BHOP_WINDOW) {
+            player.vx *= FRICTION;
+            hopStreak = 0;
+          }
+          player.vy = 0;
+          player.onGround = true;
+          framesSinceLand = 0;
+        }
+      } else {
+        player.y = plat.y + plat.h;
+        player.vy = 0;
+      }
+    }
+  }
+}
+
+function updatePlayer() {
+  if (won || dead) return;
+
+  const left  = keys['ArrowLeft']  || keys['KeyA'];
+  const right = keys['ArrowRight'] || keys['KeyD'];
+  const up    = keys['ArrowUp']    || keys['KeyW'];
+  const down  = keys['ArrowDown']  || keys['KeyS'];
+  const jump  = keys['Space'];
+
+  framesSinceLand++;
+
+  if (mode === 'side') {
+    player.vy += GRAVITY;
+
+    if (player.onGround) {
+      if (left)  { player.vx -= GROUND_ACCEL; player.facing = -1; }
+      if (right) { player.vx += GROUND_ACCEL; player.facing = 1; }
+      const maxG = MAX_GROUND_SPEED + Math.min(hopStreak * SPEED_GAIN_PER_HOP, MAX_HOP_BONUS);
+      player.vx = Math.max(-maxG, Math.min(maxG, player.vx));
+    } else {
+      if (left) {
+        const oldVx = player.vx;
+        player.vx -= AIR_ACCEL;
+        if (oldVx > 0 && player.vx < oldVx) player.vx -= AIR_STRAFE_GAIN;
+        player.facing = -1;
+      }
+      if (right) {
+        const oldVx = player.vx;
+        player.vx += AIR_ACCEL;
+        if (oldVx < 0 && player.vx > oldVx) player.vx += AIR_STRAFE_GAIN;
+        player.facing = 1;
+      }
+      player.vx = Math.max(-MAX_AIR_SPEED, Math.min(MAX_AIR_SPEED, player.vx));
+    }
+
+    if (jump && (player.onGround || framesSinceLand <= BHOP_WINDOW)) {
+      player.vy = JUMP_FORCE;
+      if (player.onGround || framesSinceLand <= BHOP_WINDOW) {
+        hopStreak++;
+        const dir = Math.sign(player.vx) || player.facing;
+        player.vx += dir * SPEED_GAIN_PER_HOP * 0.6;
+      }
+      player.onGround = false;
+      framesSinceLand = 999;
+      for (let i = 0; i < 8; i++) {
+        particles.push({
+          x: player.x + player.w/2,
+          y: player.y + player.h,
+          vx: (Math.random()-0.5)*4,
+          vy: Math.random()*2 + 1,
+          life: 20,
+          color: '#00f0ff'
+        });
+      }
+    }
+
+    if (player.onGround && !jump && framesSinceLand > 2) {
+      player.vx *= 0.82;
+    }
+
+  } else {
+    player.vy = 0;
+    const accel = 0.45;
+    const maxSpd = 7.5;
+    if (left)  player.vx -= accel;
+    if (right) player.vx += accel;
+    if (up)    player.vy -= accel;
+    if (down)  player.vy += accel;
+
+    player.vx *= 0.90;
+    player.vy *= 0.90;
+
+    const spd = Math.hypot(player.vx, player.vy);
+    if (spd > maxSpd) {
+      player.vx = (player.vx / spd) * maxSpd;
+      player.vy = (player.vy / spd) * maxSpd;
+    }
+  }
+
+  player.x += player.vx;
+  player.y += player.vy;
+
+  resolveCollision();
+
+  if (player.y > 900) {
+    dead = true;
+    setTimeout(reset, 900);
+  }
+
+  if (rectsCollide({x:player.x, y:player.y, w:player.w, h:player.h}, goal)) {
+    won = true;
+  }
+
+  if (Math.abs(player.vx) > 6 || Math.abs(player.vy) > 4) {
+    trails.push({
+      x: player.x + player.w/2,
+      y: player.y + player.h/2,
+      life: 12,
+      color: mode === 'side' ? 'rgba(0,240,255,0.5)' : 'rgba(255,0,170,0.5)'
+    });
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length-1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  for (let i = trails.length-1; i >= 0; i--) {
+    trails[i].life--;
+    if (trails[i].life <= 0) trails.splice(i, 1);
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#050510';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = mode === 'side' ? 'rgba(0,240,255,0.04)' : 'rgba(255,0,170,0.04)';
+  ctx.lineWidth = 1;
+  const gridSize = 40;
+  const offsetX = -cameraX % gridSize;
+  for (let x = offsetX; x < W; x += gridSize) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += gridSize) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.translate(-cameraX, 0);
+
+  for (const p of platforms) {
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = mode === 'side' ? '#00f0ff' : '#ff00aa';
+    ctx.fillStyle = mode === 'side' ? '#0a2a35' : '#2a0a25';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = mode === 'side' ? '#00f0ff' : '#ff00aa';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+  }
+
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = '#00ff88';
+  ctx.fillStyle = won ? '#00ff88' : '#00cc66';
+  ctx.fillRect(goal.x, goal.y, goal.w, goal.h);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#003322';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.fillText('GOAL', goal.x + 12, goal.y + 25);
+
+  for (const t of trails) {
+    ctx.globalAlpha = t.life / 12;
+    ctx.fillStyle = t.color;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 4, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  for (const p of particles) {
+    ctx.globalAlpha = p.life / 40;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const px = player.x + player.w/2;
+  const py = player.y + player.h/2;
+
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = mode === 'side' ? '#00f0ff' : '#ff00aa';
+
+  ctx.fillStyle = '#e8ffff';
+  ctx.beginPath();
+  ctx.roundRect(player.x, player.y, player.w, player.h, 6);
+  ctx.fill();
+
+  ctx.fillStyle = '#b0f0ff';
+  ctx.fillRect(player.x + 3, player.y - 10, 5, 12);
+  ctx.fillRect(player.x + player.w - 8, player.y - 10, 5, 12);
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = mode === 'side' ? '#00f0ff' : '#ff00aa';
+  ctx.beginPath();
+  ctx.arc(px + player.facing * 4, py - 2, 3, 0, Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(W - 210, 15, 190, 60);
+  ctx.fillStyle = '#00f0ff';
+  ctx.font = '13px monospace';
+  ctx.fillText(`Velocidade: ${Math.abs(player.vx).toFixed(1)}`, W - 195, 38);
+  ctx.fillText(`Hop Streak: ${hopStreak}`, W - 195, 58);
+
+  if (won) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#00ff88';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('DIMENSION CLEARED!', W/2, H/2 - 20);
+    ctx.font = '20px sans-serif';
+    ctx.fillText('Pressione R para jogar novamente', W/2, H/2 + 30);
+    ctx.textAlign = 'left';
+  }
+
+  if (dead) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ff4466';
+    ctx.font = 'bold 36px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('CAIUSTE!', W/2, H/2);
+    ctx.textAlign = 'left';
+  }
+}
+
+function loop() {
+  updatePlayer();
+  updateParticles();
+
+  const targetCam = player.x - W * 0.35;
+  cameraX += (targetCam - cameraX) * 0.08;
+  if (cameraX < 0) cameraX = 0;
+
+  draw();
+  requestAnimationFrame(loop);
+}
+
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    this.beginPath();
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r);
+    this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r);
+    this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+  };
+}
+
+updateUI();
+loop();
+</script>
+</body>
+</html>
